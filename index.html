@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Knockout</title>
+<meta name="claude:viewport-fit-sides" content="cover" />
+<meta name="description" content="Background removal that runs in your browser. AI matte, color key, DTF cleanup." />
+<style>
+  /* ------------------------------------------------------------
+     KNOCKOUT — standalone background removal.
+     One file. Drop it on Netlify or open it locally.
+     AI mode runs BiRefNet-lite (MIT) via transformers.js on
+     WebGPU when available, WASM otherwise. Nothing is uploaded.
+  ------------------------------------------------------------- */
+  :root {
+    --bg: #0b0b0e; --panel: #101013; --panel2: #17171b; --line: #2a2a31;
+    --text: #e8e6dd; --muted: #8c8a84; --accent: #be1e2d; --gold: #c9a227;
+    --ok: #3fbf7f; --danger: #e5484d; color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #eef0f3; --panel: #ffffff; --panel2: #e6e9ee; --line: #d3d7de;
+      --text: #15161a; --muted: #5f636b; --accent: #a81626; --gold: #8a6a1f;
+      --ok: #1f8f57; --danger: #c22a30; color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eef0f3; --panel: #ffffff; --panel2: #e6e9ee; --line: #d3d7de;
+    --text: #15161a; --muted: #5f636b; --accent: #a81626; --gold: #8a6a1f;
+    --ok: #1f8f57; --danger: #c22a30; color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .stripe { height: 3px; background: var(--accent); border-bottom: 1px solid var(--gold); }
+  .wrap {
+    display: grid; gap: 20px; max-width: 1400px; margin: 0 auto; padding-block: 20px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap > * { min-width: 0; }
+  @media (min-width: 1000px) { .wrap { grid-template-columns: 360px 1fr; padding-block: 24px; } }
+  .notice { border: 1px solid var(--danger); color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border-radius: 12px; padding: 10px 12px; font-size: 13px; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: .02em; }
+  .tag { margin: 2px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .25em; color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .label { font-size: 10px; text-transform: uppercase; letter-spacing: .15em; color: var(--muted); }
+  .stack > * + * { margin-top: 14px; }
+  .stack > label { display: block; }
+  .drop {
+    display: block; cursor: pointer; text-align: center; padding: 32px 16px;
+    border: 2px dashed var(--line); border-radius: 16px; transition: .15s;
+  }
+  .drop:hover, .drop.on { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 6%, transparent); }
+  .drop input { display: none; }
+  .drop .big { font-size: 26px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .mode {
+    text-align: left; padding: 10px 12px; border-radius: 12px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted); font: inherit;
+  }
+  .mode b { display: block; font-size: 14px; }
+  .mode small { font-size: 10px; }
+  .mode:disabled { opacity: .45; cursor: not-allowed; }
+  .mode.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .check { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--muted); cursor: pointer; }
+  input[type=checkbox], input[type=range] { accent-color: var(--accent); }
+  /* Sliders own sideways drags; vertical swipes still scroll the page. Big thumb target for fingers. */
+  input[type=range] { width: 100%; height: 32px; margin: 0; touch-action: pan-y; }
+  /* iPhone zooms the whole page into any field under 16px; keep fields at 16px so it never does. */
+  input, select, textarea { font-size: 16px; }
+  input[type=number] {
+    width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: 8px; font: inherit; font-size: 16px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  input[type=color] { width: 48px; height: 36px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); cursor: pointer; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .hint { font-size: 11px; color: var(--muted); margin: 0; }
+  .hidden { display: none !important; }
+  button.btn {
+    font: inherit; font-weight: 600; cursor: pointer; border-radius: 999px; padding: 9px 16px; font-size: 12px;
+    border: 1px solid var(--gold); background: transparent; color: var(--gold);
+  }
+  button.btn.solid { background: var(--gold); color: #fff; }
+  button.btn.go { width: 100%; padding: 13px; font-size: 14px; border-color: var(--accent); background: var(--accent); color: #fff; }
+  button.btn:disabled { opacity: .4; cursor: default; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 12px; padding: 8px 12px; border: 0; background: transparent; color: var(--muted); cursor: pointer; text-transform: capitalize; }
+  .seg { flex-wrap: wrap; }
+  .pieces { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .piece { width: 76px; height: 76px; border: 1px solid var(--line); border-radius: 8px; padding: 4px; cursor: pointer;
+    display: grid; place-items: center; }
+  .piece img { max-width: 100%; max-height: 100%; }
+  .piece:hover, .piece:focus-visible { border-color: var(--gold); outline: none; }
+  .seg button.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .pill { font-size: 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .pill b { color: var(--gold); }
+  .push { margin-left: auto; }
+  .grid { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 1300px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .grid > .card { min-width: 0; }
+  .empty { padding: 64px 0; text-align: center; color: var(--muted); }
+  .item-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+  .item-head .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { font-size: 10px; text-transform: uppercase; letter-spacing: .15em; color: var(--muted); }
+  .status.done { color: var(--ok); } .status.error { color: var(--danger); }
+  .x { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 6px; }
+  .x:hover { color: var(--danger); } .x.dl { color: var(--gold); }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pane {
+    aspect-ratio: 1; width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+    display: grid; place-items: center; background: var(--bg);
+  }
+  .pane img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .pane.pick img { cursor: crosshair; }
+  .pane .ph { font-size: 10px; text-transform: uppercase; letter-spacing: .15em; color: var(--muted); }
+  .bd-checker { background: repeating-conic-gradient(#3a3a3a 0% 25%, #222 0% 50%) 50% / 16px 16px; }
+  .bgbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+  .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+  .swatch.checker { background: repeating-conic-gradient(#3a3a3a 0% 25%, #222 0% 50%) 50% / 10px 10px; }
+  .swatch.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+  .swatch:focus-visible, .mode:focus-visible, button.btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  #bdColor { width: 36px; height: 30px; padding: 0; }
+  #bdName { font-size: 12px; color: var(--text); min-width: 90px; }
+  .meta { font-size: 10px; color: var(--muted); margin-top: 8px; }
+  .err { font-size: 11px; color: var(--danger); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="stripe"></div>
+<div class="wrap">
+  <!-- left: intake + controls -->
+  <section class="stack">
+    <header>
+      <h1>Knockout</h1>
+      <p class="tag">Background removal · runs local, costs nothing</p>
+    </header>
+
+    <div class="notice" id="boot">If this message stays, the app you opened this in is blocking the tool. Open it in Chrome, Edge or Safari instead.</div>
+    <div class="notice hidden" id="notice"></div>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="image/*,.png,.jpg,.jpeg,.webp,.gif,.svg,.pdf,.ai,.heic,.heif" multiple />
+      <div class="big">✂</div>
+      <div>Drop art or photos</div>
+      <p class="hint">PNG, JPG, WEBP, SVG, PDF, AI · drop anywhere or paste · batch is fine</p>
+    </label>
+
+    <div class="card">
+      <div class="label">Method</div>
+      <div class="modes">
+        <button class="mode on" data-mode="ai"><b>AI matte</b><small>photos, hair, busy art</small></button>
+        <button class="mode" data-mode="key"><b>Color key</b><small>flat art on solid bg</small></button>
+      </div>
+      <div id="aiOpts" style="margin-top:12px">
+        <p class="hint">BiRefNet-lite, on your GPU if the browser supports WebGPU, CPU otherwise.
+          The first run downloads the model (~100–200 MB), then it's cached.</p>
+      </div>
+      <div id="keyOpts" class="stack hidden" style="margin-top:14px">
+        <div class="row">
+          <input type="color" id="keyColor" value="#ffffff" />
+          <span class="hint">Key color, or click an original to sample it</span>
+        </div>
+        <label class="check"><input type="checkbox" id="autoKey" checked /> Auto-detect each image's background from its corners</label>
+        <label><span class="label">Tolerance · <span id="tolVal">12</span></span>
+          <input type="range" id="tol" min="0" max="60" value="12" /></label>
+        <label class="check"><input type="checkbox" id="contig" checked /> Edges only: keeps background-colored areas enclosed by the design. Uncheck to also clear holes inside letters like O, A and 8</label>
+      </div>
+    </div>
+
+    <div class="card stack">
+      <div class="label">DTF cleanup</div>
+      <label class="check"><input type="checkbox" id="hard" checked /> Hard edges: no semi-transparent pixels, so white ink won't ghost</label>
+      <label id="thrWrap"><span class="label">Cutoff · <span id="thrVal">128</span></span>
+        <input type="range" id="thr" min="1" max="254" value="128" /></label>
+      <label><span class="label">Choke (px) eats halo fringe</span>
+        <input type="number" id="choke" min="0" max="6" value="1" /></label>
+      <label class="check"><input type="checkbox" id="trim" checked /> Trim to art, for tighter gang sheet nesting</label>
+    </div>
+
+    <div class="card stack">
+      <div class="label">Resolution</div>
+      <div class="seg" id="upSeg" role="group" aria-label="Upscale">
+        <button data-up="off" class="on">Original</button>
+        <button data-up="2">2×</button>
+        <button data-up="4">4×</button>
+        <button data-up="dpi">300 DPI</button>
+      </div>
+      <label id="printWrap" class="hidden"><span class="label">Print width (inches)</span>
+        <input type="number" id="printW" min="0.5" max="60" step="0.5" value="10" /></label>
+      <p class="hint">Upscales smoothly, then re-cuts the edges at full size so logos and type print crisp.
+        It sharpens edges; it can't invent detail a blurry photo never had.</p>
+    </div>
+
+    <div class="card stack">
+      <div class="label">Separate logos</div>
+      <label class="check"><input type="checkbox" id="split" /> Split each island of art into its own PNG</label>
+      <label id="gapWrap" class="hidden"><span class="label">Keep pieces together if closer than · <span id="gapVal">3</span>% of the art</span>
+        <input type="range" id="gap" min="0" max="10" step="0.5" value="3" /></label>
+    </div>
+
+    <button class="btn go" id="run" disabled>✂ Knock out</button>
+  </section>
+
+  <!-- right: results -->
+  <section>
+    <div class="row">
+      <div class="pill">Done · <b id="count">0/0</b></div>
+      <button class="btn push" id="dlAll" disabled>⬇ Download all</button>
+    </div>
+    <div class="bgbar">
+      <span class="label">Background</span>
+      <div class="row" id="swatches" style="gap:6px"></div>
+      <input type="color" id="bdColor" value="#1f2a44" title="Pick any color" />
+      <span id="bdName">Transparent</span>
+      <label class="check" style="margin-left:auto"><input type="checkbox" id="bake" disabled /> Put this color in my download</label>
+    </div>
+    <div class="card empty" id="empty" style="margin-top:16px">Nothing on the bench. Drop some art.</div>
+    <div class="grid" id="grid"></div>
+  </section>
+</div>
+
+<script type="module">
+/* ================= ENGINE ================= */
+const TRANSFORMERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.5";
+const MODEL_ID = "onnx-community/BiRefNet_lite-ONNX";
+let engine = null;
+
+function loadEngine(onProgress) {
+  if (engine) return engine;
+  engine = (async () => {
+    const tf = await Promise.race([
+      import(TRANSFORMERS_URL),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("the AI library didn't load within 30 seconds")), 30000)),
+    ]);
+    const device = navigator.gpu ? "webgpu" : "wasm";
+    const progress_callback = (p) => {
+      if (p.status === "progress" && typeof p.progress === "number") onProgress?.(p.progress);
+    };
+    const model = await tf.AutoModel.from_pretrained(MODEL_ID, {
+      device, dtype: device === "webgpu" ? "fp16" : "fp32", progress_callback,
+    });
+    const processor = await tf.AutoProcessor.from_pretrained(MODEL_ID);
+    return { model, processor, RawImage: tf.RawImage, device };
+  })();
+  engine.catch(() => { engine = null; }); // let a failed load retry
+  return engine;
+}
+
+function imageData(img) {
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  return ctx.getImageData(0, 0, cv.width, cv.height);
+}
+
+async function aiMask(img) {
+  const { model, processor, RawImage } = await loadEngine();
+  const src = imageData(img);
+  const raw = new RawImage(src.data, src.width, src.height, 4);
+  const { pixel_values } = await processor(raw);
+  const { output_image } = await model({ input_image: pixel_values });
+  const small = await RawImage.fromTensor(output_image[0].sigmoid().mul(255).to("uint8"));
+  const full = await small.resize(src.width, src.height);
+  const out = new Uint8ClampedArray(src.width * src.height);
+  for (let i = 0; i < out.length; i++) out[i] = full.data[i * full.channels];
+  return out;
+}
+
+// Contiguous = flood from the edges only, so white inside the art survives.
+function keyMask(img, key, tolerance, contiguous) {
+  const { data, width: w, height: h } = imageData(img);
+  const n = w * h, out = new Uint8ClampedArray(n).fill(255);
+  const max = (tolerance / 100) * 441.7; // 441.7 = max RGB distance
+  const hit = (i) => {
+    const p = i * 4;
+    if (data[p + 3] < 8) return true;
+    const dr = data[p] - key[0], dg = data[p + 1] - key[1], db = data[p + 2] - key[2];
+    return Math.sqrt(dr * dr + dg * dg + db * db) <= max;
+  };
+  if (!contiguous) { for (let i = 0; i < n; i++) if (hit(i)) out[i] = 0; return out; }
+  const seen = new Uint8Array(n), stack = [];
+  const seed = (i) => { if (!seen[i] && hit(i)) { seen[i] = 1; stack.push(i); } };
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  while (stack.length) {
+    const i = stack.pop(); out[i] = 0;
+    const x = i % w;
+    if (x > 0) seed(i - 1); if (x < w - 1) seed(i + 1);
+    if (i >= w) seed(i - w); if (i < n - w) seed(i + w);
+  }
+  return out;
+}
+
+function erode(a, w, h) {
+  const out = new Uint8ClampedArray(a.length);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let m = 255;
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= h) { m = 0; continue; }
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, v = xx < 0 || xx >= w ? 0 : a[yy * w + xx];
+        if (v < m) m = v;
+      }
+    }
+    out[y * w + x] = m;
+  }
+  return out;
+}
+
+function bounds(a, w, h) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (a[y * w + x] > 0) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+// Apply mask + DTF cleanup, return a transparent PNG.
+// Phones cap canvas size (iOS Safari: ~16.7 MP); desktops go much bigger.
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const MAX_PIXELS = IOS ? 16e6 : 64e6;
+const PRINT_DPI = 300;
+
+const toBlob = (cv) => new Promise((res) => cv.toBlob(res, "image/png"));
+
+// Apply mask + cleanup, upscale, then optionally split into islands.
+async function composite(img, mask, c) {
+  const src = imageData(img), { width: w, height: h } = src;
+  let a = new Uint8ClampedArray(mask);
+  for (let i = 0; i < a.length; i++) a[i] = Math.min(a[i], src.data[i * 4 + 3]); // keep existing transparency
+  for (let k = 0; k < c.choke; k++) a = erode(a, w, h);
+  for (let i = 0; i < a.length; i++) src.data[i * 4 + 3] = a[i];
+
+  const box = (c.trim && bounds(a, w, h)) || { x: 0, y: 0, w, h };
+  const base = document.createElement("canvas"); base.width = w; base.height = h;
+  base.getContext("2d").putImageData(src, 0, 0);
+  let cv = document.createElement("canvas"); cv.width = box.w; cv.height = box.h;
+  cv.getContext("2d").drawImage(base, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+
+  // Upscale on the soft matte, then cut the hard edge at full size: crisp edges, no stair-steps.
+  let scale = c.up === "2" ? 2 : c.up === "4" ? 4 : c.up === "dpi" ? (c.printW * PRINT_DPI) / box.w : 1;
+  scale = Math.max(1, scale);
+  let capped = false;
+  if (box.w * box.h * scale * scale > MAX_PIXELS) { scale = Math.sqrt(MAX_PIXELS / (box.w * box.h)); capped = true; }
+  if (scale > 1.01) cv = upscale(cv, Math.round(box.w * scale), Math.round(box.h * scale));
+
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  const px = ctx.getImageData(0, 0, cv.width, cv.height);
+  if (c.hardEdge) {
+    for (let i = 3; i < px.data.length; i += 4) px.data[i] = px.data[i] >= c.threshold ? 255 : 0;
+    ctx.putImageData(px, 0, 0);
+  }
+
+  const blob = await toBlob(cv);
+  const out = { blob, url: URL.createObjectURL(blob), width: cv.width, height: cv.height, capped, pieces: [] };
+  if (c.split) out.pieces = await splitIslands(px, c.gap);
+  return out;
+}
+
+// Step up in 2x hops with high-quality smoothing; one big jump looks soft and blocky.
+function upscale(cv, tw, th) {
+  let cur = cv;
+  while (cur.width < tw) {
+    const nw = Math.min(tw, cur.width * 2), nh = nw === tw ? th : Math.round(cur.height * (nw / cur.width));
+    const next = document.createElement("canvas"); next.width = nw; next.height = nh;
+    const ctx = next.getContext("2d");
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(cur, 0, 0, nw, nh);
+    cur = next;
+  }
+  return cur;
+}
+
+// Each separate island of art becomes its own PNG. Pieces closer than `gapPct`% of the
+// art's long side stay grouped, so a word or a logo with a tagline doesn't shatter.
+async function splitIslands(px, gapPct) {
+  const { width: w, height: h, data } = px;
+  // Half-gap cells searched three deep: anything closer than the gap always joins, at any resolution.
+  const cell = Math.max(2, Math.round((gapPct / 100) * Math.max(w, h) / 2), Math.ceil(Math.max(w, h) / 1500));
+  const gw = Math.ceil(w / cell), gh = Math.ceil(h / cell);
+  const occ = new Uint8Array(gw * gh);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    if (data[(y * w + x) * 4 + 3]) occ[((y / cell) | 0) * gw + ((x / cell) | 0)] = 1;
+
+  const label = new Int32Array(gw * gh);
+  let n = 0;
+  for (let i = 0; i < occ.length; i++) {
+    if (!occ[i] || label[i]) continue;
+    label[i] = ++n;
+    const stack = [i];
+    while (stack.length) {
+      const j = stack.pop(), jx = j % gw, jy = (j / gw) | 0;
+      for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+        const x = jx + dx, y = jy + dy;
+        if (x < 0 || y < 0 || x >= gw || y >= gh) continue;
+        const k = y * gw + x;
+        if (occ[k] && !label[k]) { label[k] = n; stack.push(k); }
+      }
+    }
+  }
+  if (n < 2) return [];
+
+  const box = Array.from({ length: n + 1 }, () => ({ x0: w, y0: h, x1: -1, y1: -1, count: 0 }));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (!data[(y * w + x) * 4 + 3]) continue;
+    const b = box[label[((y / cell) | 0) * gw + ((x / cell) | 0)]];
+    if (x < b.x0) b.x0 = x; if (x > b.x1) b.x1 = x; if (y < b.y0) b.y0 = y; if (y > b.y1) b.y1 = y;
+    b.count++;
+  }
+  const total = box.reduce((s, b) => s + b.count, 0);
+  const speck = Math.max(64, total * 0.0005); // dust, not a logo
+
+  const pieces = [];
+  for (let L = 1; L <= n; L++) {
+    const b = box[L];
+    if (b.count < speck) continue;
+    const pw = b.x1 - b.x0 + 1, ph = b.y1 - b.y0 + 1;
+    const out = new ImageData(pw, ph);
+    for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) {
+      if (label[((y / cell) | 0) * gw + ((x / cell) | 0)] !== L) continue;
+      const s = (y * w + x) * 4, d = ((y - b.y0) * pw + (x - b.x0)) * 4;
+      out.data[d] = data[s]; out.data[d + 1] = data[s + 1]; out.data[d + 2] = data[s + 2]; out.data[d + 3] = data[s + 3];
+    }
+    const cv = document.createElement("canvas"); cv.width = pw; cv.height = ph;
+    cv.getContext("2d").putImageData(out, 0, 0);
+    const blob = await toBlob(cv);
+    pieces.push({ blob, url: URL.createObjectURL(blob), width: pw, height: ph, x: b.x0, y: b.y0 });
+  }
+  // reading order: top to bottom by row band, then left to right
+  const band = Math.max(1, h / 20);
+  pieces.sort((p, q) => Math.floor(p.y / band) - Math.floor(q.y / band) || p.x - q.x);
+  return pieces.length > 1 ? pieces : (pieces.forEach((p) => URL.revokeObjectURL(p.url)), []);
+}
+
+function freeOut(out) {
+  if (!out) return;
+  URL.revokeObjectURL(out.url);
+  out.pieces?.forEach((p) => URL.revokeObjectURL(p.url));
+}
+
+function pickColor(img, fx, fy) {
+  const { data, width, height } = imageData(img);
+  const x = Math.min(width - 1, Math.max(0, Math.round(fx * width)));
+  const y = Math.min(height - 1, Math.max(0, Math.round(fy * height)));
+  const p = (y * width + x) * 4;
+  return [data[p], data[p + 1], data[p + 2]];
+}
+
+/* ================= UI ================= */
+const $ = (id) => document.getElementById(id);
+// Inside claude.ai the frame blocks the model download, so AI matte can't run there.
+const IN_CLAUDE = !!window.claude?.use;
+const state = { items: [], mode: IN_CLAUDE ? "key" : "ai", backdrop: "checker", busy: false, up: "off" };
+
+// Background guess for flat art: per-channel median of the four corner pixels.
+function cornerColor(img) {
+  const w = img.naturalWidth - 1, h = img.naturalHeight - 1;
+  const cs = [[0, 0], [w, 0], [0, h], [w, h]].map(([x, y]) => pickColor(img, x / Math.max(w, 1), y / Math.max(h, 1)));
+  return [0, 1, 2].map((c) => { const v = cs.map((k) => k[c]).sort((a, b) => a - b); return Math.round((v[1] + v[2]) / 2); });
+}
+const uid = () => Math.random().toString(36).slice(2, 9);
+const hexToRgb = (v) => [1, 3, 5].map((i) => parseInt(v.slice(i, i + 2), 16));
+const rgbToHex = (c) => "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+const cleanup = () => ({
+  hardEdge: $("hard").checked, threshold: +$("thr").value,
+  choke: Math.min(6, Math.max(0, parseInt($("choke").value) || 0)), trim: $("trim").checked,
+  up: state.up, printW: Math.max(0.5, parseFloat($("printW").value) || 10),
+  split: $("split").checked, gap: +$("gap").value,
+});
+const baseName = (n) => n.replace(/\.[^.]+$/, "") + "-knockout.png";
+
+/* ---------- intake: anything a print shop gets handed ---------- */
+const PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/";
+const RASTER_LONG_SIDE = 4000; // px for vector art (PDF/AI/SVG): ~13" at 300 DPI
+const NO_GO = { psd: "Photoshop", eps: "EPS", tif: "TIFF", tiff: "TIFF", cdr: "CorelDRAW" };
+
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error("decode"));
+    img.src = url;
+  });
+}
+
+async function canvasToImg(cv) {
+  const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+  const url = URL.createObjectURL(blob);
+  return { img: await loadImg(url), srcUrl: url };
+}
+
+// PDF, and AI files saved with PDF compatibility (Illustrator's default): render page 1.
+async function fromPdf(f) {
+  const pdfjs = await import(PDFJS + "pdf.min.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.mjs";
+  const doc = await pdfjs.getDocument({ data: await f.arrayBuffer() }).promise;
+  const page = await doc.getPage(1);
+  const base = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: RASTER_LONG_SIDE / Math.max(base.width, base.height) });
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(viewport.width); cv.height = Math.round(viewport.height);
+  await page.render({ canvasContext: cv.getContext("2d"), viewport, background: "rgba(0,0,0,0)" }).promise;
+  return canvasToImg(cv);
+}
+
+// SVG: rasterize big so the knockout comes out print-sized.
+async function fromSvg(f) {
+  const img = await loadImg(URL.createObjectURL(f));
+  const w0 = img.naturalWidth || 1000, h0 = img.naturalHeight || 1000;
+  const s = RASTER_LONG_SIDE / Math.max(w0, h0);
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(w0 * s); cv.height = Math.round(h0 * s);
+  cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+  return canvasToImg(cv);
+}
+
+async function decode(f) {
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  if (NO_GO[ext]) throw new Error(`${NO_GO[ext]} files can't be read in a browser. Export as PNG (or PDF) and drop that in.`);
+  if (ext === "pdf" || ext === "ai" || f.type === "application/pdf") {
+    try { return await fromPdf(f); }
+    catch { throw new Error(ext === "ai"
+      ? "This .ai file was saved without PDF compatibility. Re-save it with \"Create PDF Compatible File\" checked, or export a PNG."
+      : "Couldn't read this PDF."); }
+  }
+  if (ext === "svg" || f.type === "image/svg+xml") return fromSvg(f);
+  const srcUrl = URL.createObjectURL(f);
+  try { return { img: await loadImg(srcUrl), srcUrl }; }
+  catch {
+    URL.revokeObjectURL(srcUrl);
+    throw new Error(ext === "heic" || ext === "heif"
+      ? "This browser can't open iPhone HEIC photos. Use Safari, or share the photo as JPG."
+      : `Can't read this file${ext ? ` (.${ext})` : ""}. Use PNG, JPG, WEBP, SVG, PDF or AI.`);
+  }
+}
+
+function addFiles(files) {
+  for (const f of [...(files || [])]) {
+    const it = { id: uid(), name: f.name || "pasted image", status: "loading" };
+    state.items.push(it);
+    decode(f).then(
+      ({ img, srcUrl }) => Object.assign(it, { img, srcUrl, status: "idle" }),
+      (e) => Object.assign(it, { status: "error", error: e.message }),
+    ).finally(render);
+  }
+  render();
+}
+
+function render() {
+  const { items } = state, done = items.filter((i) => i.out).length;
+  $("count").textContent = `${done}/${items.length}`;
+  $("dlAll").disabled = !done;
+  const ready = items.filter((i) => i.img).length;
+  $("run").disabled = !ready || state.busy;
+  if (!state.busy) $("run").textContent = `✂ Knock out ${ready || ""}`;
+  $("empty").classList.toggle("hidden", items.length > 0);
+  $("grid").innerHTML = "";
+  for (const it of items) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="item-head">
+        <div class="name"></div>
+        <span class="status ${it.status}">${it.status === "working" ? "working…" : it.status}</span>
+        ${it.out ? `<button class="x dl" title="Download">⬇</button>` : ""}
+        <button class="x rm" title="Remove">✕</button>
+      </div>
+      <div class="pair">
+        <div class="pane ${state.mode === "key" ? "pick" : ""}">${it.img ? `<img class="orig" alt="original" />` : `<span class="ph">${it.status === "loading" ? "reading…" : "✕"}</span>`}</div>
+        <div class="pane ${state.backdrop === "checker" ? "bd-checker" : ""}" style="${state.backdrop === "checker" ? "" : `background:${state.backdrop}`}">${it.out ? `<img class="res" alt="knockout" />` : `<span class="ph">${it.status === "working" ? "…" : "result"}</span>`}</div>
+      </div>
+      ${it.error ? `<div class="err"></div>` : ""}
+      ${it.out ? `<div class="meta">${it.out.width} × ${it.out.height}px · ${(it.out.width / PRINT_DPI).toFixed(1)}″ × ${(it.out.height / PRINT_DPI).toFixed(1)}″ at ${PRINT_DPI} DPI${it.out.capped ? " · capped at this device's max image size" : ""}${it.out.pieces.length ? ` · <b>${it.out.pieces.length} separate logos</b> (tap one to save it)` : ""}</div>` : ""}
+      ${it.out?.pieces.length ? `<div class="pieces"></div>` : ""}`;
+    el.querySelector(".name").textContent = it.name;
+    const orig = el.querySelector(".orig");
+    if (orig) orig.src = it.srcUrl;
+    if (it.out) el.querySelector(".res").src = it.out.url;
+    it.out?.pieces.forEach((pc, n) => {
+      const b = document.createElement("button");
+      b.className = "piece" + (state.backdrop === "checker" ? " bd-checker" : "");
+      if (state.backdrop !== "checker") b.style.background = state.backdrop;
+      b.title = `Save piece ${n + 1} (${pc.width} × ${pc.height}px)`;
+      const im = document.createElement("img"); im.src = pc.url; im.alt = `piece ${n + 1}`;
+      b.appendChild(im);
+      b.onclick = () => saveOne(pc, pieceName(it, n));
+      el.querySelector(".pieces").appendChild(b);
+    });
+    if (it.error) el.querySelector(".err").textContent = it.error;
+    if (orig) orig.onclick = (e) => {
+      if (state.mode !== "key") return;
+      const r = e.currentTarget.getBoundingClientRect();
+      $("keyColor").value = rgbToHex(pickColor(it.img, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height));
+      $("autoKey").checked = false; // a hand-picked color wins
+    };
+    el.querySelector(".rm").onclick = () => {
+      freeOut(it.out);
+      if (it.srcUrl) URL.revokeObjectURL(it.srcUrl);
+      state.items = state.items.filter((x) => x !== it); render();
+    };
+    el.querySelector(".dl")?.addEventListener("click", () => download(it));
+    $("grid").appendChild(el);
+  }
+}
+
+function notice(msg) { $("notice").textContent = msg; $("notice").classList.toggle("hidden", !msg); }
+
+// Inside claude.ai the frame blocks plain downloads, so ask the viewer through the downloads capability.
+const saver = window.claude?.use ? window.claude.use("downloads").catch(() => null) : Promise.resolve(null);
+// Flatten a result onto the chosen background color.
+async function baked(file) {
+  const img = await loadImg(file.url);
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = state.backdrop; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(img, 0, 0);
+  const blob = await toBlob(cv);
+  return { blob, url: URL.createObjectURL(blob) };
+}
+
+const pieceName = (it, n) => baseName(it.name).replace(/\.png$/, `-${n + 1}.png`);
+
+// Save one PNG, baking the background color in when that's switched on.
+async function saveOne(file, name) {
+  if ($("bake").checked && state.backdrop !== "checker") {
+    const f = await baked(file);
+    await saveFile(name.replace(/\.png$/, `-on-${state.backdrop.slice(1)}.png`), f.blob, f.url);
+    setTimeout(() => URL.revokeObjectURL(f.url), 5000);
+    return;
+  }
+  await saveFile(name, file.blob, file.url);
+}
+
+// Split results save every piece; otherwise the whole design.
+async function download(it) {
+  if (!it.out) return;
+  if (it.out.pieces.length) { for (const [n, pc] of it.out.pieces.entries()) await saveOne(pc, pieceName(it, n)); return; }
+  await saveOne(it.out, baseName(it.name));
+}
+
+async function saveFile(filename, blob, url) {
+  const dl = await saver;
+  if (dl) {
+    try { await dl.save({ filename, data: blob }); }
+    catch (e) { if (e?.code !== "declined") notice(`Couldn't save ${filename}: ${e?.message ?? e}`); }
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+}
+
+async function run() {
+  state.busy = true; notice(""); render();
+  try {
+    if (state.mode === "ai") {
+      $("run").textContent = "Loading model… 0%";
+      await loadEngine((p) => { $("run").textContent = `Loading model… ${Math.round(p)}%`; });
+    }
+    $("run").textContent = "Knocking out…";
+    const key = hexToRgb($("keyColor").value), tol = +$("tol").value, contig = $("contig").checked;
+    for (const it of state.items) {
+      if (!it.img) continue;
+      it.status = "working"; it.error = undefined; render();
+      try {
+        const k = $("autoKey").checked ? cornerColor(it.img) : key;
+        if (state.mode === "key" && $("autoKey").checked) $("keyColor").value = rgbToHex(k);
+        const mask = state.mode === "ai" ? await aiMask(it.img) : keyMask(it.img, k, tol, contig);
+        const out = await composite(it.img, mask, cleanup());
+        freeOut(it.out);
+        Object.assign(it, { mask, out, status: "done" });
+      } catch (e) {
+        Object.assign(it, { status: "error", error: e?.message ?? String(e) });
+      }
+      render();
+    }
+  } catch (e) {
+    notice(`The AI model couldn't load here (${e?.message ?? e}). Color key still works. For AI matte, open this file in Chrome or Edge on a computer.`);
+  } finally {
+    state.busy = false; render();
+  }
+}
+
+// Cleanup tweaks re-composite from cached masks, no re-run needed.
+let gen = 0;
+async function recomposite() {
+  $("thrWrap").classList.toggle("hidden", !$("hard").checked);
+  $("thrVal").textContent = $("thr").value;
+  const mine = ++gen, c = cleanup();
+  for (const it of state.items) {
+    if (!it.mask) continue;
+    const out = await composite(it.img, it.mask, c);
+    if (mine !== gen) { freeOut(out); return; }
+    freeOut(it.out);
+    it.out = out;
+  }
+  render();
+}
+
+/* ---------- wiring ---------- */
+// Drop anywhere on the page: a near-miss must never navigate the tab away.
+const drop = $("drop");
+window.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("on"); });
+window.addEventListener("dragleave", (e) => { if (!e.relatedTarget) drop.classList.remove("on"); });
+window.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("on"); addFiles(e.dataTransfer?.files); });
+window.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) addFiles(files);
+});
+$("file").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+
+document.querySelectorAll(".mode").forEach((b) => b.onclick = () => {
+  state.mode = b.dataset.mode;
+  document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x === b));
+  $("aiOpts").classList.toggle("hidden", state.mode !== "ai");
+  $("keyOpts").classList.toggle("hidden", state.mode !== "key");
+  render();
+});
+// Garment colors to preview art against; the picker covers anything else.
+const SWATCHES = [
+  ["checker", "Transparent"], ["#ffffff", "White"], ["#000000", "Black"], ["#9a9a9e", "Heather grey"],
+  ["#1f2a44", "Navy"], ["#2450a6", "Royal blue"], ["#b3202a", "Red"], ["#5a1a24", "Maroon"],
+  ["#24452f", "Forest green"], ["#d8c7a3", "Sand"], ["#f2b8c6", "Light pink"],
+];
+function setBackdrop(value, name) {
+  state.backdrop = value;
+  $("bdName").textContent = name;
+  $("bake").disabled = value === "checker";
+  if (value === "checker") $("bake").checked = false;
+  document.querySelectorAll(".swatch").forEach((x) => x.classList.toggle("on", x.dataset.bd === value));
+  render();
+}
+for (const [value, name] of SWATCHES) {
+  const b = document.createElement("button");
+  b.className = "swatch" + (value === "checker" ? " checker on" : "");
+  b.dataset.bd = value; b.title = name; b.setAttribute("aria-label", `Preview on ${name}`);
+  if (value !== "checker") b.style.background = value;
+  b.onclick = () => setBackdrop(value, name);
+  $("swatches").appendChild(b);
+}
+$("bdColor").addEventListener("input", (e) => setBackdrop(e.target.value, e.target.value.toUpperCase()));
+$("tol").oninput = () => { $("tolVal").textContent = $("tol").value; };
+["hard", "thr", "choke", "trim", "printW", "split", "gap"].forEach((id) => $(id).addEventListener("change", recomposite));
+$("split").addEventListener("change", () => $("gapWrap").classList.toggle("hidden", !$("split").checked));
+$("gap").addEventListener("input", () => { $("gapVal").textContent = $("gap").value; });
+document.querySelectorAll("#upSeg button").forEach((b) => b.onclick = () => {
+  state.up = b.dataset.up;
+  document.querySelectorAll("#upSeg button").forEach((x) => x.classList.toggle("on", x === b));
+  $("printWrap").classList.toggle("hidden", state.up !== "dpi");
+  recomposite();
+});
+$("thr").addEventListener("input", () => { $("thrVal").textContent = $("thr").value; });
+$("run").onclick = run;
+$("dlAll").onclick = async () => { for (const it of state.items) await download(it); };
+$("boot").remove();
+$("keyColor").addEventListener("input", () => { $("autoKey").checked = false; });
+if (IN_CLAUDE) {
+  const ai = document.querySelector('[data-mode="ai"]');
+  ai.disabled = true;
+  ai.querySelector("small").textContent = "desktop browser file only";
+  document.querySelectorAll(".mode").forEach((x) => x.classList.toggle("on", x.dataset.mode === "key"));
+  $("aiOpts").classList.add("hidden");
+  $("keyOpts").classList.remove("hidden");
+}
+render();
+</script>
+</body>
+</html>
