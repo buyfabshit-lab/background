@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Background Removal Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --gold:#d4a843; --gold-hi:#f6dc8a; --gold-lo:#7a5a1c; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { min-height:100%; }
+  body {
+    min-height:100vh;
+    background:#0b0906 url("bg.png") center / cover no-repeat fixed;
+    font-family:"Cinzel", Georgia, serif;
+    color:var(--gold-hi);
+    display:flex; flex-direction:column; align-items:center;
+    padding:24px 16px 32px;
+  }
+  body::before {
+    content:""; position:fixed; inset:0; z-index:-1;
+    background:radial-gradient(ellipse at center, rgba(0,0,0,.55) 0%, rgba(0,0,0,.85) 100%);
+  }
+  h1 {
+    font-weight:800; text-align:center;
+    font-size:clamp(28px, 5vw, 56px);
+    background:linear-gradient(180deg, var(--gold-hi), var(--gold) 55%, var(--gold-lo));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+    text-shadow:0 2px 12px rgba(0,0,0,.6);
+    margin-bottom:20px; letter-spacing:1px;
+  }
+  .frame {
+    width:100%; max-width:1200px;
+    padding:10px;
+    border-radius:14px;
+    background:linear-gradient(145deg, var(--gold-hi), var(--gold) 40%, var(--gold-lo) 70%, var(--gold));
+    box-shadow:0 0 0 2px #000, 0 0 40px rgba(212,168,67,.35), 0 20px 60px rgba(0,0,0,.8);
+  }
+  .inner { background:#000; border-radius:8px; overflow:hidden; }
+  iframe { display:block; width:100%; height:calc(100vh - 200px); min-height:640px; border:0; }
+  footer { margin-top:16px; font-size:13px; opacity:.7; text-align:center; }
+  footer a { color:var(--gold-hi); }
+</style>
+</head>
+<body>
+  <h1>Background Removal Tool</h1>
+  <div class="frame">
+    <div class="inner">
+      <iframe src="https://hf-applications-background-removal.hf.space"
+              title="Background removal" allow="clipboard-write" loading="eager"></iframe>
+    </div>
+  </div>
+  <footer>Not loading? <a href="https://huggingface.co/spaces/hf-applications/background-removal" target="_blank" rel="noopener">Open the tool directly</a></footer>
+</body>
+</html>
